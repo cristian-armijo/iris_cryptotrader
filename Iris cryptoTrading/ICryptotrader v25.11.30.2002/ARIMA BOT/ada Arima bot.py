@@ -1,7 +1,7 @@
 import ccxt
 #push
 #push
-#push
+#push  
 import pandas as pd
 import numpy as np
 import time
