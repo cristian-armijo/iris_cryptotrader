@@ -7,10 +7,11 @@ from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from statsmodels.tsa.arima.model import ARIMA
-from arch import arch_model
+from arch import arch_model  
 
+#test
 # =====================================================
-# CONFIGURACIÓN GENERAL
+# CONFIGURACIÓN GENERAL test
 # =====================================================
 
 API_KEY = os.getenv("BINANCE_API_KEY", "CHUrW6Pks0Ji5sazJW0Q6sFo2LmipW5qBCzn8JyESoIXGvtMraPyhEEjREMg5sYm")
