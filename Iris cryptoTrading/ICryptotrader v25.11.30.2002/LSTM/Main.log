@@ -1,0 +1,10 @@
+2025-12-03 10:59:02.194 [info] update#setState idle
+2025-12-03 10:59:32.211 [info] update#setState checking for updates
+2025-12-03 10:59:33.598 [info] update#setState downloading
+2025-12-03 10:59:33.602 [info] update#setState downloaded
+2025-12-03 10:59:33.603 [info] update#setState updating
+2025-12-03 11:00:00.658 [warning] No ptyHost heartbeat after 6 seconds
+2025-12-03 11:03:53.847 [info] update#setState ready
+2025-12-03 18:25:43.902 [warning] No ptyHost heartbeat after 6 seconds
+2025-12-03 18:34:29.968 [warning] No ptyHost heartbeat after 6 seconds
+2025-12-03 21:39:56.440 [warning] No ptyHost heartbeat after 6 seconds
