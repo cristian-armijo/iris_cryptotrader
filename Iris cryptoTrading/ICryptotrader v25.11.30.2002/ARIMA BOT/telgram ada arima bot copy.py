@@ -6,6 +6,10 @@ from datetime import datetime
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.metrics import mean_squared_error
 from math import sqrt
+try:
+    from telegram_notifier import send_trade_notification
+except ImportError:
+    print("⚠️ No se pudo importar telegram_notifier")
 
 # Configuración de la API
 exchange = ccxt.binance({
@@ -15,20 +19,21 @@ exchange = ccxt.binance({
 })
 
 # Parámetros
-SYMBOL = 'BTC/USDT'
+SYMBOL = 'BTC/USDC'
 TIMEFRAME = '1h'
 TRAIN_WINDOW = 168
 FORECAST_HORIZON = 3
-LEVERAGE = 60
+LEVERAGE = 10
 AMOUNT = 6
 CONFIDENCE_THRESHOLD = 0.6
+STOP_LOSS_PCT = 0.02  # 2%
 
 def initialize():
     try:
         exchange.load_markets()
         exchange.set_leverage(LEVERAGE, SYMBOL)
         exchange.set_margin_mode('isolated', SYMBOL)
-        print("✅ Configuración completada")
+        print("✅ Configuración completBTC")
     except Exception as e:
         print(f"❌ Error: {e}")
 
@@ -81,111 +86,113 @@ def train_arima_model(data):
         print(f"❌ Error: {e}")
         return None, 0, (0, 0, 0)
 
-def analyze_forecast(predictions, confidence):
+def analyze_forecast(predictions, confidence, current_price):
     try:
         if confidence < CONFIDENCE_THRESHOLD:
-            return "hold", 0
-        trend = predictions[-1] - predictions[0]
-        price_change_pct = (trend / predictions[0]) * 100
+            # Cálculo auxiliar para notificación incluso si es hold por confianza baja
+            predicted_price = predictions[-1]
+            trend = predicted_price - current_price
+            price_change_pct = (trend / current_price) * 100
+            
+            # Valores por defecto para hold
+            tp = predicted_price
+            if predicted_price > current_price:
+                sl = current_price * (1 - STOP_LOSS_PCT)
+            else:
+                sl = current_price * (1 + STOP_LOSS_PCT)
+            
+            return "hold", price_change_pct, predicted_price, sl, tp
+
+        predicted_price = predictions[-1]
+        trend = predicted_price - current_price
+        price_change_pct = (trend / current_price) * 100
+        
         print(f"\n📊 Cambio: {price_change_pct:+.2f}% | Confianza: {confidence:.2%}")
         
         if trend > 0 and price_change_pct > 0.05:  # Umbral reducido a 0.05%
-            return "buy", price_change_pct
+            tp = predicted_price
+            sl = current_price * (1 - STOP_LOSS_PCT)
+            return "buy", price_change_pct, predicted_price, sl, tp
+            
         elif trend < 0 and price_change_pct < -0.05:  # Umbral reducido a 0.05%
-            return "sell", abs(price_change_pct)
+            tp = predicted_price
+            sl = current_price * (1 + STOP_LOSS_PCT)
+            return "sell", abs(price_change_pct), predicted_price, sl, tp
+            
         else:
-            return "hold", 0
+            tp = predicted_price
+            if trend > 0:
+                 sl = current_price * (1 - STOP_LOSS_PCT)
+            else:
+                 sl = current_price * (1 + STOP_LOSS_PCT)
+            return "hold", price_change_pct, predicted_price, sl, tp
+
     except Exception as e:
         print(f"❌ Error: {e}")
-        return "hold", 0
+        return "hold", 0, current_price, 0, 0
 
-def execute_trade(signal, change_pct, predictions):
+def execute_trade(signal, change_pct, predictions, current_price, sl, tp):
     try:
-        current_price = exchange.fetch_ticker(SYMBOL)['last']
         amount = (AMOUNT * LEVERAGE) / current_price
         
         print("\n" + "="*60)
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
         
         if signal == 'buy':
-            print(f"� [SEÑAL DE COMPRA] {SYMBOL}")
+            print(f"🚀 [SEÑAL DE COMPRA] {SYMBOL}")
             print("="*60)
             print(f"💰 Precio Actual: ${current_price:.4f}")
             print(f"📊 Predicción ARIMA: Tendencia ALCISTA (+{change_pct:.2f}%)")
-            print(f"� Precio Objetivo: ${predictions[-1]:.4f}")
+            print(f"🎯 Precio Objetivo: ${predictions[-1]:.4f}")
             print(f"💵 Inversión: ${AMOUNT} | Apalancamiento: {LEVERAGE}x")
             print(f"💸 Exposición Total: ${AMOUNT * LEVERAGE}")
             
             order = exchange.create_market_buy_order(SYMBOL, amount)
-            print(f"✅ Orden de COMPRA ejecutada: {order['id']}")
+            print(f"✅ Orden de COMPRA ejecutBTC: {order['id']}")
             
         elif signal == 'sell':
-            print(f"� [SEÑAL DE VENTA] {SYMBOL}")
+            print(f"🐻 [SEÑAL DE VENTA] {SYMBOL}")
             print("="*60)
             print(f"💰 Precio Actual: ${current_price:.4f}")
             print(f"📊 Predicción ARIMA: Tendencia BAJISTA (-{change_pct:.2f}%)")
-            print(f"� Precio Objetivo: ${predictions[-1]:.4f}")
+            print(f"🎯 Precio Objetivo: ${predictions[-1]:.4f}")
             print(f"💵 Inversión: ${AMOUNT} | Apalancamiento: {LEVERAGE}x")
             print(f"💸 Exposición Total: ${AMOUNT * LEVERAGE}")
             
             order = exchange.create_market_sell_order(SYMBOL, amount)
-            print(f"✅ Orden de VENTA ejecutada: {order['id']}")
+            print(f"✅ Orden de VENTA ejecutBTC: {order['id']}")
         
-        set_take_profit_stop_loss(order, signal, change_pct, current_price, predictions)
+        place_sl_tp_orders(order, signal, sl, tp)
         print("="*60 + "\n")
     except Exception as e:
         print(f"❌ Error: {e}")
 
-def set_take_profit_stop_loss(order, side, change_pct, current_price, predictions):
+def place_sl_tp_orders(order, side, sl_price, tp_price):
     try:
-        entry_price = float(order.get('average', current_price))
-        predicted_price = predictions[1]  # Valor del MEDIO de las 3 predicciones
-        
-        # Parámetros de riesgo
-        STOP_LOSS_PERCENT = 2.0  # 2% de stop loss
-        
-        if side == 'buy':
-            # COMPRA: Esperamos que suba
-            # Take Profit: EXACTAMENTE la predicción ARIMA
-            if predicted_price > current_price:
-                take_profit_price = predicted_price  # SIN margen adicional
-            else:
-                # Fallback a porcentaje fijo
-                take_profit_price = entry_price * (1 + (change_pct / 100))
-            
-            # Stop Loss: porcentaje fijo
-            stop_loss_price = entry_price * (1 - STOP_LOSS_PERCENT / 100)
-            
-        else:  # sell
-            # VENTA: Esperamos que baje
-            # Take Profit: EXACTAMENTE la predicción ARIMA
-            if predicted_price < current_price:
-                take_profit_price = predicted_price  # SIN margen adicional
-            else:
-                # Fallback a porcentaje fijo
-                take_profit_price = entry_price * (1 - (change_pct / 100))
-            
-            # Stop Loss: porcentaje fijo
-            stop_loss_price = entry_price * (1 + STOP_LOSS_PERCENT / 100)
-        
-        # Calcular porcentajes
-        tp_change = ((take_profit_price - entry_price) / entry_price) * 100
-        sl_change = ((stop_loss_price - entry_price) / entry_price) * 100
+        entry_price = float(order.get('average', 0))
+        if entry_price == 0:
+             # Fallback si no hay average price
+             # Intentar obtener info de la orden de nuevo o usar precio actual
+             entry_price = float(exchange.fetch_order(order['id'], SYMBOL)['average'])
+
+        # Calcular porcentajes para mostrar
+        tp_change = ((tp_price - entry_price) / entry_price) * 100
+        sl_change = ((sl_price - entry_price) / entry_price) * 100
         
         print(f"\n📋 Colocando Stop Loss y Take Profit...")
         
         # Orden Take Profit
         exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell' if side == 'buy' else 'buy',
-                            order['amount'], params={'stopPrice': take_profit_price, 'closePosition': True})
+                            order['amount'], params={'stopPrice': tp_price, 'closePosition': True})
         
         # Orden Stop Loss
         exchange.create_order(SYMBOL, 'STOP_MARKET', 'sell' if side == 'buy' else 'buy',
-                            order['amount'], params={'stopPrice': stop_loss_price, 'closePosition': True})
+                            order['amount'], params={'stopPrice': sl_price, 'closePosition': True})
         
-        print(f"✅ Órdenes colocadas:")
-        print(f"   🎯 Take Profit: ${take_profit_price:.4f} ({tp_change:+.2f}%)")
-        print(f"   �️  Stop Loss: ${stop_loss_price:.4f} ({sl_change:.2f}%)")
-        print(f"   📊 Basado en ARIMA: ${predicted_price:.4f}")
+        print(f"✅ Órdenes colocBTCs:")
+        print(f"   🎯 Take Profit: ${tp_price:.4f} ({tp_change:+.2f}%)")
+        print(f"   🛑 Stop Loss: ${sl_price:.4f} ({sl_change:.2f}%)")
+        
     except Exception as e:
         print(f"⚠️ Error TP/SL: {e}")
 
@@ -199,10 +206,17 @@ def check_open_positions():
     except:
         return False
 
+def get_current_price():
+    try:
+        ticker = exchange.fetch_ticker(SYMBOL)
+        return ticker['last']
+    except Exception as e:
+        return None
+
 def main():
     initialize()
     print(f"\n{'='*60}")
-    print(f"🤖 BOT ARIMA - {SYMBOL}")
+    print(f"🤖 BOT ARIMA TELEGRAM - {SYMBOL}")
     print(f"{'='*60}")
     print(f"⏱️ {TIMEFRAME} | Horizonte: {FORECAST_HORIZON} velas")
     print(f"💰 ${AMOUNT} | {LEVERAGE}x | Umbral: 0.1% | Análisis: 10 min")
@@ -217,6 +231,12 @@ def main():
                 time.sleep(60 * 30)
                 continue
             
+            # Obtener precio actual primero
+            current_price = get_current_price()
+            if current_price is None:
+                time.sleep(60)
+                continue
+
             data = get_historical_data()
             if data is None:
                 time.sleep(60)
@@ -230,14 +250,35 @@ def main():
             print(f"📊 ARIMA{params} | Confianza: {confidence:.2%}")
             print(f"🔮 Predicciones: {predictions}")
             
-            signal, change_pct = analyze_forecast(predictions, confidence)
+            signal, change_pct, predicted_price, sl, tp = analyze_forecast(predictions, confidence, current_price)
+            
+            # SIEMPRE enviar notificación a Telegram
+            try:
+                # Calcular cambio % para display si es hold
+                if signal == "hold":
+                    display_signal = "buy" if predicted_price > current_price else "sell"
+                    display_change_pct = abs((predicted_price - current_price) / current_price * 100)
+                else:
+                    display_signal = signal
+                    display_change_pct = change_pct
+
+                send_trade_notification(
+                    SYMBOL, display_signal, current_price,
+                    (AMOUNT * LEVERAGE) / current_price,
+                    sl, tp,
+                    f"PRED-{datetime.now().strftime('%H%M%S')}",
+                    display_change_pct
+                )
+                print("📱 Notificación enviBTC a Telegram")
+            except Exception as e:
+                print(f"⚠️ Error Telegram: {e}")
             
             if signal != "hold":
-                execute_trade(signal, change_pct, predictions)
+                execute_trade(signal, change_pct, predictions, current_price, sl, tp)
             else:
-                print("⏸️ Sin señales")
+                print("⏸️ Sin señales fuertes (Telegram enviado)")
             
-            time.sleep(60 * 10)
+            time.sleep(60 * 60)
         except KeyboardInterrupt:
             print("\n🔴 Detenido")
             break

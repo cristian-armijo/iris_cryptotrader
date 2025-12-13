@@ -15,7 +15,7 @@ exchange = ccxt.binance({
 })
 
 # Parámetros
-SYMBOL = 'BNB/USDT'
+SYMBOL = 'ETH/USDT'
 TIMEFRAME = '1h'
 TRAIN_WINDOW = 168
 FORECAST_HORIZON = 3
