@@ -6,6 +6,8 @@ from datetime import datetime
 from ta.momentum import RSIIndicator
 from statsmodels.tsa.arima.model import ARIMA
 import warnings
+import os
+import requests
 warnings.filterwarnings('ignore')
 
 # ============================================
@@ -16,8 +18,11 @@ api_secret = 'uRuwevZGWcQue78V0Tkxgi7PYmFOG9nMPkIxUmHscU2yzVrk0GvtNyHgcSIU4GVZ'
 client = Client(api_key, api_secret)
 
 symbol = 'SOLUSDC'
-interval = Client.KLINE_INTERVAL_15MINUTE
+interval = Client.KLINE_INTERVAL_5MINUTE
 quantity = 0.01
+# Telegram (usar variables de entorno para no exponer credenciales)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8507635476:AAEmQeQKSe1v1_FM8J1zTs6eP33dIrHnPcI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7892188422")
 
 # Parámetros de riesgo
 STOP_LOSS_PERCENT = 2.5  # 2.5%
@@ -150,6 +155,53 @@ def calculate_sl_tp(current_price, signal, arima_prediction=None):
         return None, None
     
     return stop_loss, take_profit
+
+# ============================================
+# TELEGRAM
+# ============================================
+def send_telegram_message(message):
+    """Envia texto simple a Telegram si hay credenciales configuradas"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram no configurado: defina TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID.")
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Error al enviar mensaje de Telegram: {e}")
+
+
+def build_signal_message(signal, current_price, stop_loss, take_profit, arima_pred, trend, rsi_value):
+    """Construye el texto a enviar por Telegram al detectar senal"""
+    predicted_price = None
+    if arima_pred is not None and len(arima_pred) > 0:
+        predicted_price = arima_pred[-1]
+
+    predicted_direction = ""
+    if predicted_price is not None:
+        if predicted_price > current_price:
+            predicted_direction = "alcista"
+        elif predicted_price < current_price:
+            predicted_direction = "bajista"
+        else:
+            predicted_direction = "neutral"
+
+    lines = [
+        f"Signal: {signal} {symbol}",
+        f"Precio actual: {current_price:.4f} USDC",
+        f"Stop loss: {stop_loss:.4f} USDC",
+        f"Take profit: {take_profit:.4f} USDC",
+        f"Tendencia EMAs: {trend}",
+        f"RSI: {rsi_value:.2f}"
+    ]
+
+    if predicted_price is not None:
+        lines.append(f"Proxima vela estimada: {predicted_price:.4f} USDC ({predicted_direction})")
+
+    return "\n".join(lines)
 
 # ============================================
 # MENSAJES EN CONSOLA
@@ -301,7 +353,7 @@ def execute_trade(signal, current_price, stop_loss, take_profit, arima_pred, ema
 print(f"\n🚀 Bot de Trading Heikin-Ashi + ARIMA iniciado para {symbol}")
 print(f"⚙️  Stop Loss: {STOP_LOSS_PERCENT}% | Take Profit: {TAKE_PROFIT_PERCENT}%")
 print(f"🔄 Órdenes OCO automáticas: ACTIVADAS")
-print(f"⏰ Intervalo: 15 minutos\n")
+print(f"⏰ Intervalo: 5 minutos\n")
 
 while True:
     try:
@@ -333,14 +385,16 @@ while True:
         # Ejecutar trade si hay señal
         if final_signal:
             stop_loss, take_profit = calculate_sl_tp(current_price, final_signal, arima_prediction)
+            telegram_text = build_signal_message(final_signal, current_price, stop_loss, take_profit, arima_prediction, trend, rsi_value)
+            send_telegram_message(telegram_text)
             execute_trade(final_signal, current_price, stop_loss, take_profit, arima_prediction, 
                          ema9, ema21, ema50, trend, rsi_value)
         else:
             # Mostrar estado actual
             print_status(current_price, ema9, ema21, ema50, trend, rsi_value)
         
-        # Esperar 15 minutos
-        time.sleep(900)
+        # Esperar 5 minutos
+        time.sleep(300)
         
     except Exception as e:
         print(f"❌ Error en el loop principal: {str(e)}")
